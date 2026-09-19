@@ -1,0 +1,30 @@
+{
+  "name": "dev-sandbox",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "dev",
+  "workspaceFolder": "/workspaces/dev",
+  "features": {
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+  "containerEnv": {
+    "SHELL": "/bin/bash"
+  },
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "terminal.integrated.profiles.linux": {
+          "tmux": {
+            "path": "/usr/bin/tmux",
+            "args": ["new-session", "-A", "-s", "dev"]
+          }
+        },
+        "terminal.integrated.defaultProfile.linux": "tmux"
+      }
+    }
+  },
+  "remoteEnv": {
+    "PATH": "${containerEnv:PATH}:/home/dev/.local/bin"
+  },
+  "postCreateCommand": "bash /workspace-source/.devcontainer/post-create.sh",
+  "remoteUser": "dev"
+}

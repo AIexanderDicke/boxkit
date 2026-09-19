@@ -1,0 +1,38 @@
+name: dev-sandbox
+
+services:
+  dev:
+    build:
+      context: ..
+      dockerfile: .devcontainer/Dockerfile
+      args:
+        # Values come from .devcontainer/.env
+        NODE_VERSION: ${NODE_VERSION:-22}
+        PNPM_VERSION: ${PNPM_VERSION:-latest}
+        PYTHON_VERSION: ${PYTHON_VERSION:-3.13}
+        UV_VERSION: ${UV_VERSION:-latest}
+        CODEX_VERSION: ${CODEX_VERSION:-latest}
+        OPENCODE_VERSION: ${OPENCODE_VERSION:-latest}
+        LAZYDOCKER_VERSION: ${LAZYDOCKER_VERSION:-0.25.2}
+        REVDIFF_VERSION: ${REVDIFF_VERSION:-latest}
+    command: sleep infinity
+    user: root
+    init: true
+    env_file:
+      - path: secrets.env
+        required: false
+    volumes:
+      - dev-sandbox-workspace:/workspaces/dev
+      # Read-only staging copy used by post-create.sh to seed the volume.
+      - ../:/workspace-source:ro
+      # Mask secrets.env on the staging mount (secrets come via env_file).
+      - ./secrets.env.example:/workspace-source/.devcontainer/secrets.env:ro
+      # Optional: bind mount a host directory, e.g.:
+      # - ../taskboard:/workspaces/host/taskboard:cached
+      - type: volume
+        source: dev-sandbox-home
+        target: /home
+
+volumes:
+  dev-sandbox-workspace:
+  dev-sandbox-home:
