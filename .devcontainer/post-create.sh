@@ -24,6 +24,16 @@ else
   echo "WARNING: $SOURCE_DIR not found; skipping workspace seeding." >&2
 fi
 
+# --- Keep host-facing docs out of the sandbox ---------------------------------
+# README.md is written for humans on the host, not for the container. Remove the
+# seeded copy (also on volumes initialized before this rule existed), but only
+# while it still matches the repo, so a user-authored file is never deleted.
+if [ -f "$SOURCE_DIR/README.md" ] && [ -f "$WORKSPACE/README.md" ] \
+  && cmp -s "$SOURCE_DIR/README.md" "$WORKSPACE/README.md"; then
+  rm -f "$WORKSPACE/README.md"
+  echo "==> Removed seeded README.md (host-facing docs stay out of the sandbox)."
+fi
+
 # --- Secrets never enter the container filesystem -----------------------------
 # The container receives secrets as env vars (secrets.env -> compose env_file).
 # The file itself must not exist anywhere an agent can read it: delete any copy

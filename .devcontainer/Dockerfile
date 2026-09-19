@@ -1,4 +1,5 @@
-FROM mcr.microsoft.com/devcontainers/base:1-bookworm
+# syntax=docker/dockerfile:1
+FROM ubuntu:24.04
 
 # Tool versions, single source of truth: .devcontainer/.env
 ARG NODE_VERSION=22
@@ -10,11 +11,21 @@ ARG OPENCODE_VERSION=latest
 ARG LAZYDOCKER_VERSION=0.25.2
 ARG REVDIFF_VERSION=latest
 
-# The upstream image may carry an obsolete Yarn apt source that breaks apt-get update.
-RUN rm -f /etc/apt/sources.list.d/yarn.list /etc/apt/sources.list.d/yarn.sources
+# --- System packages (least volatile layer) -----------------------------------
+RUN apt-get update \
+  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+       bash-completion ca-certificates curl git less procps sudo tmux xz-utils \
+  && rm -rf /var/lib/apt/lists/*
 
-# Pre-create the workspace dir so the named volume starts out dev-writable.
-RUN mkdir -p /workspaces/dev && chown vscode:vscode /workspaces/dev
+# --- Dev user (uid 1000, passwordless sudo) + workspace dir --------------------
+# /home is masked by the dev-sandbox-home volume at runtime; entrypoint.sh
+# re-creates the home dir there on first start.
+RUN userdel --remove ubuntu 2>/dev/null || true \
+  && useradd --uid 1000 --create-home --shell /bin/bash dev \
+  && printf 'dev ALL=(ALL) NOPASSWD:ALL\n' > /etc/sudoers.d/dev \
+  && chmod 0440 /etc/sudoers.d/dev \
+  && mkdir -p /workspaces/dev \
+  && chown dev:dev /workspaces/dev
 
 # --- proto (moonrepo) toolchain manager --------------------------------------
 # Manages node, python, etc. with per-project version detection (.prototools,
@@ -30,15 +41,16 @@ RUN curl -fsSL https://moonrepo.dev/install/proto.sh | env PROTO_HOME=/opt/proto
   && "$PROTO_HOME/bin/proto" install "python" "${PYTHON_VERSION}" --pin global \
   && "$PROTO_HOME/bin/proto" install "uv" "${UV_VERSION}" --pin global \
   && printf '[settings]\nauto-install = true\ntelemetry = false\n' >> "$PROTO_HOME/.prototools" \
-  && chown -R vscode:vscode "$PROTO_HOME"
+  && rm -rf "$PROTO_HOME/cache" "$PROTO_HOME/temp" \
+  && chown -R dev:dev "$PROTO_HOME"
 
-# --- tmux + lazydocker --------------------------------------------------------
-# tmux is the default terminal in VS Code; `lzd` runs lazydocker.
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends tmux \
-  && rm -rf /var/lib/apt/lists/* \
-  && curl -fsSL "https://github.com/jesseduffield/lazydocker/releases/download/v${LAZYDOCKER_VERSION}/lazydocker_${LAZYDOCKER_VERSION}_Linux_x86_64.tar.gz" \
-       | tar -xz -C /usr/local/bin lazydocker
+# --- lazydocker + shell config --------------------------------------------------
+# profile.d keeps proto shims on PATH for sudo/login shells (sudo's secure_path
+# resets the container PATH).
+RUN curl -fsSL "https://github.com/jesseduffield/lazydocker/releases/download/v${LAZYDOCKER_VERSION}/lazydocker_${LAZYDOCKER_VERSION}_Linux_x86_64.tar.gz" \
+     | tar -xz -C /usr/local/bin lazydocker \
+  && printf 'export PATH="/opt/proto/shims:/opt/proto/bin:$PATH"\n' > /etc/profile.d/proto.sh \
+  && printf '\nalias lzd="lazydocker"\n' >> /etc/bash.bashrc
 
 # --- revdiff (diff-review TUI, umputun/revdiff) --------------------------------
 # "latest" resolves the tag at build time via the GitHub API; bash completions
@@ -56,13 +68,14 @@ RUN if [ "${REVDIFF_VERSION}" = "latest" ]; then \
   && mv /tmp/completions/revdiff.bash /etc/bash_completion.d/revdiff \
   && rm -rf /tmp/completions
 
-# `lzd` shortcut for lazydocker, sourced by every interactive bash shell.
-RUN printf '\nalias lzd="lazydocker"\n' >> /etc/bash.bashrc
+# --- Coding agents -------------------------------------------------------------
+# npm-based agents installed into /usr/local (proto rewrites npm's global
+# prefix, so the claude-code devcontainer feature cannot be used). Separate
+# layers so a bump of CODEX/OPENCODE does not rebuild the claude-code layer.
+RUN npm_config_prefix=/usr/local npm install -g --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code
 
-# npm-based coding agents installed into /usr/local (proto rewrites npm's
-# global prefix, so the claude-code devcontainer feature cannot be used).
-RUN npm_config_prefix=/usr/local npm install -g --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code \
-  && npm_config_prefix=/usr/local npm install -g --allow-scripts=@openai/codex --allow-scripts=opencode-ai "@openai/codex@${CODEX_VERSION}" "opencode-ai@${OPENCODE_VERSION}"
+RUN npm_config_prefix=/usr/local npm install -g --allow-scripts=@openai/codex --allow-scripts=opencode-ai \
+      "@openai/codex@${CODEX_VERSION}" "opencode-ai@${OPENCODE_VERSION}"
 
 COPY .devcontainer/entrypoint.sh /usr/local/bin/dev-entrypoint.sh
 RUN chmod +x /usr/local/bin/dev-entrypoint.sh
