@@ -17,13 +17,26 @@ RUN apt-get update \
        bash-completion ca-certificates curl git less procps sudo tmux xz-utils \
   && rm -rf /var/lib/apt/lists/*
 
-# --- Dev user (uid 1000, passwordless sudo) + workspace dir --------------------
+# --- Docker CLI (Docker-outside-of-Docker) + socat -----------------------------
+# The CLI talks to the host daemon socket forwarded by docker-compose.yml (DooD,
+# no privileged container). entrypoint.sh runs socat as root to expose that
+# socket to the unprivileged `dev` user, so the host socket's UID/GID does not
+# have to match anything inside the container.
+RUN install -m 0755 -d /etc/apt/keyrings \
+  && curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc \
+  && chmod a+r /etc/apt/keyrings/docker.asc \
+  && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" > /etc/apt/sources.list.d/docker.list \
+  && apt-get update \
+  && apt-get install -y --no-install-recommends socat docker-ce-cli docker-buildx-plugin docker-compose-plugin \
+  && rm -rf /var/lib/apt/lists/*
+
+# --- Dev user (uid 1000, NO sudo) + workspace dir ------------------------------
 # /home is masked by the dev-sandbox-home volume at runtime; entrypoint.sh
-# re-creates the home dir there on first start.
+# re-creates the home dir there on first start. `dev` deliberately has NO sudo:
+# privilege escalation goes through the password-protected `root-dev` account
+# created below.
 RUN userdel --remove ubuntu 2>/dev/null || true \
   && useradd --uid 1000 --create-home --shell /bin/bash dev \
-  && printf 'dev ALL=(ALL) NOPASSWD:ALL\n' > /etc/sudoers.d/dev \
-  && chmod 0440 /etc/sudoers.d/dev \
   && mkdir -p /workspaces/dev \
   && chown dev:dev /workspaces/dev
 
@@ -76,6 +89,26 @@ RUN npm_config_prefix=/usr/local npm install -g --allow-scripts=@anthropic-ai/cl
 
 RUN npm_config_prefix=/usr/local npm install -g --allow-scripts=@openai/codex --allow-scripts=opencode-ai \
       "@openai/codex@${CODEX_VERSION}" "opencode-ai@${OPENCODE_VERSION}"
+
+# --- Privileged admin account ------------------------------------------------
+# `dev` is deliberately left WITHOUT sudo. `root-dev` is the only sudoer and is
+# password-protected. The password is read from the BuildKit secret granted in
+# docker-compose.yml (from the untracked .devcontainer/secrets.env), so the
+# plaintext never lands in an image layer — only the hash in /etc/shadow.
+# Created in the system UID range so it can never collide with `dev` (uid 1000)
+# nor with the host-UID remap the devcontainer CLI applies to the remote user.
+# NOTE: BuildKit does not invalidate the cache when a secret's contents change,
+# so after editing ROOT_DEV_PASSWORD you must rebuild without cache.
+RUN --mount=type=secret,id=secrets_env,required=true \
+  set -eu; \
+  ROOT_DEV_PASSWORD="$(sed -n 's/^ROOT_DEV_PASSWORD=//p' /run/secrets/secrets_env 2>/dev/null | grep -v '^$' | tail -n1)"; \
+  if [ -z "${ROOT_DEV_PASSWORD:-}" ]; then \
+    echo "ERROR: set ROOT_DEV_PASSWORD in .devcontainer/secrets.env before building." >&2; \
+    exit 1; \
+  fi; \
+  useradd --system --create-home --shell /bin/bash --home-dir /home/root-dev root-dev; \
+  printf 'root-dev:%s\n' "$ROOT_DEV_PASSWORD" | chpasswd; \
+  usermod -aG sudo root-dev
 
 COPY .devcontainer/entrypoint.sh /usr/local/bin/dev-entrypoint.sh
 RUN chmod +x /usr/local/bin/dev-entrypoint.sh

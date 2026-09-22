@@ -14,8 +14,12 @@ Environment description for agents working inside this container.
 - **Home**: `/home/dev`, persisted on the volume `dev-sandbox-home`. Git
   config, tool state, shell history and anything you put here survives
   container destruction/rebuild.
-- **User**: `dev` (unprivileged, but with passwordless sudo — installing
-  system packages with `sudo apt-get install ...` works).
+- **User**: `dev` (unprivileged, with **no sudo**). The only sudoer is the
+  password-protected `root-dev` account, created at image build time; escalate
+  with `su - root-dev` (you will be prompted for its password). Installing system
+  packages therefore requires that escalation.
+- **Docker**: the Docker CLI talks to the host daemon (Docker-outside-of-Docker).
+  `docker` works as `dev`; containers you start are siblings on the host daemon.
 - **Shell**: bash; VS Code terminals run inside tmux (`tmux new -A -s dev`).
 
 ## Preinstalled tooling

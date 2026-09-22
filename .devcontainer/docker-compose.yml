@@ -15,23 +15,42 @@ services:
         OPENCODE_VERSION: ${OPENCODE_VERSION:-latest}
         LAZYDOCKER_VERSION: ${LAZYDOCKER_VERSION:-0.25.2}
         REVDIFF_VERSION: ${REVDIFF_VERSION:-latest}
+      # Passes .devcontainer/secrets.env (BuildKit secret, not an image layer) so
+      # the Dockerfile can create the password-protected `root-dev` sudoer.
+      secrets:
+        - secrets_env
     command: sleep infinity
     user: root
     init: true
     env_file:
       - path: secrets.env
         required: false
+    environment:
+      # ROOT_DEV_PASSWORD is a build-only secret. Blank it so env_file never
+      # injects it into the running container, where `dev` could read it.
+      ROOT_DEV_PASSWORD: ""
     volumes:
       - dev-sandbox-workspace:/workspaces/dev
       # Read-only staging copy used by post-create.sh to seed the volume.
       - ../:/workspace-source:ro
       # Mask secrets.env on the staging mount (secrets come via env_file).
       - ./secrets.env.example:/workspace-source/.devcontainer/secrets.env:ro
+      # --- Docker-outside-of-Docker -----------------------------------------
+      # Host daemon socket, forwarded read-write. entrypoint.sh fronts it with a
+      # root-owned socat proxy at /var/run/docker.sock (owned by `dev`) so the
+      # unprivileged user can use docker. Set DOCKER_HOST_SOCKET in .env to the
+      # host socket path: rootless Docker usually
+      # /run/user/$(id -u)/docker.sock, rootful /var/run/docker.sock.
+      - "${DOCKER_HOST_SOCKET:-/run/user/1000/docker.sock}:/var/run/docker-host.sock"
       # Optional: bind mount a host directory, e.g.:
       # - ../taskboard:/workspaces/host/taskboard:cached
       - type: volume
         source: dev-sandbox-home
         target: /home
+
+secrets:
+  secrets_env:
+    file: secrets.env
 
 volumes:
   dev-sandbox-workspace:
